@@ -1,0 +1,21 @@
+[package]
+name = "tunl"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+tokio = { version = "1.28", features = ["io-util", "rt"] }
+worker = "0.0.18"
+futures-util = "0.3.28"
+pin-project-lite = "0.2"
+uuid = "1.8.0"
+bytes = "1.4.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+codegen-units = 1

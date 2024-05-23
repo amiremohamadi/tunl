@@ -1,0 +1,169 @@
+use crate::config::VlessConfig;
+use crate::proxy::Proxy;
+
+use std::net::{Ipv4Addr, Ipv6Addr};
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use bytes::{BufMut, BytesMut};
+use futures_util::Stream;
+use pin_project_lite::pin_project;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+use worker::*;
+
+pin_project! {
+    pub struct VlessStream<'a> {
+        pub config: VlessConfig,
+        pub ws: &'a WebSocket,
+        pub buffer: BytesMut,
+        #[pin]
+        pub events: EventStream<'a>,
+    }
+}
+
+impl<'a> VlessStream<'a> {
+    pub fn new(config: VlessConfig, ws: &'a WebSocket, events: EventStream<'a>) -> Self {
+        let buffer = BytesMut::new();
+
+        Self {
+            config,
+            ws,
+            buffer,
+            events,
+        }
+    }
+}
+
+impl<'a> Proxy for VlessStream<'a> {
+    async fn process(&mut self) -> Result<()> {
+        // https://xtls.github.io/Xray-docs-next/en/development/protocols/vless.html
+        // +------------------+-----------------+---------------------------------+---------------------------------+-------------+---------+--------------+---------+--------------+
+        // |      1 byte      |    16 bytes     |             1 byte              |             M bytes             |   1 byte    | 2 bytes |    1 byte    | S bytes |   X bytes    |
+        // +------------------+-----------------+---------------------------------+---------------------------------+-------------+---------+--------------+---------+--------------+
+        // | Protocol Version | Equivalent UUID | Additional Information Length M | Additional Information ProtoBuf | Instruction | Port    | Address Type | Address | Request Data |
+        // +------------------+-----------------+---------------------------------+---------------------------------+-------------+---------+--------------+---------+--------------+
+
+        // ignore protocl version
+        self.read_u8().await?;
+
+        // UUID
+        let mut uuid = [0u8; 16];
+        self.read_exact(&mut uuid).await?;
+        let uuid = uuid::Uuid::from_bytes(uuid);
+        if self.config.uuid != uuid {
+            return Err(Error::RustError("incorrect uuid".to_string()));
+        }
+
+        // additional information
+        let len = self.read_u8().await?;
+        let mut addon = vec![0u8; len as _];
+        self.read_exact(&mut addon).await?;
+
+        // instruction
+        self.read_u8().await?;
+
+        // port
+        let mut port = [0u8; 2];
+        self.read_exact(&mut port).await?;
+        let port = u16::from_be_bytes(port);
+
+        // address type
+        let addr = match self.read_u8().await? {
+            // ipv4
+            1 => {
+                let mut addr = [0u8; 4];
+                self.read_exact(&mut addr).await?;
+                Ipv4Addr::new(addr[0], addr[1], addr[2], addr[3]).to_string()
+            }
+            // domain
+            2 => {
+                let len = self.read_u8().await?;
+                let mut domain = vec![0u8; len as _];
+                self.read_exact(&mut domain).await?;
+                String::from_utf8_lossy(&domain).to_string()
+            }
+            // ipv6
+            3 => {
+                let mut addr = [0u8; 16];
+                self.read_exact(&mut addr).await?;
+                Ipv6Addr::new(
+                    ((addr[0] as u16) << 16) | (addr[1] as u16),
+                    ((addr[2] as u16) << 16) | (addr[3] as u16),
+                    ((addr[4] as u16) << 16) | (addr[5] as u16),
+                    ((addr[6] as u16) << 16) | (addr[7] as u16),
+                    ((addr[8] as u16) << 16) | (addr[9] as u16),
+                    ((addr[10] as u16) << 16) | (addr[11] as u16),
+                    ((addr[12] as u16) << 16) | (addr[13] as u16),
+                    ((addr[14] as u16) << 16) | (addr[15] as u16),
+                )
+                .to_string()
+            }
+            // invalid
+            _ => {
+                return Err(Error::RustError("invalid address".to_string()));
+            }
+        };
+
+        console_log!("connecting to upstream {}:{}", addr, port);
+        let mut upstream = Socket::builder().connect(addr, port)?;
+
+        // +-----------------------------------------------+------------------------------------+------------------------------------+---------------+
+        // |                    1 Byte                     |               1 Byte               |              N Bytes               |    Y Bytes    |
+        // +-----------------------------------------------+------------------------------------+------------------------------------+---------------+
+        // | Protocol Version, consistent with the request | Length of additional information N | Additional information in ProtoBuf | Response data |
+        // +-----------------------------------------------+------------------------------------+------------------------------------+---------------+
+        self.write(&[0u8; 2]).await?; // no additional information
+        tokio::io::copy_bidirectional(self, &mut upstream).await?;
+
+        Ok(())
+    }
+}
+
+impl<'a> AsyncRead for VlessStream<'a> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<tokio::io::Result<()>> {
+        let mut this = self.project();
+
+        loop {
+            let size = std::cmp::min(this.buffer.len(), buf.remaining());
+            if size > 0 {
+                buf.put_slice(&this.buffer.split_to(size));
+                return Poll::Ready(Ok(()));
+            }
+
+            match this.events.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(WebsocketEvent::Message(msg)))) => {
+                    msg.bytes().iter().for_each(|x| this.buffer.put_slice(&x));
+                }
+                Poll::Pending => return Poll::Pending,
+                _ => return Poll::Ready(Ok(())),
+            }
+        }
+    }
+}
+
+impl<'a> AsyncWrite for VlessStream<'a> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<tokio::io::Result<usize>> {
+        return Poll::Ready(
+            self.ws
+                .send_with_bytes(buf)
+                .map(|_| buf.len())
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string())),
+        );
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<tokio::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<tokio::io::Result<()>> {
+        unimplemented!()
+    }
+}
