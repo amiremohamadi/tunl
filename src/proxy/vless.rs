@@ -67,42 +67,7 @@ impl<'a> Proxy for VlessStream<'a> {
         self.read_exact(&mut port).await?;
         let port = u16::from_be_bytes(port);
 
-        // address type
-        let addr = match self.read_u8().await? {
-            // ipv4
-            1 => {
-                let mut addr = [0u8; 4];
-                self.read_exact(&mut addr).await?;
-                Ipv4Addr::new(addr[0], addr[1], addr[2], addr[3]).to_string()
-            }
-            // domain
-            2 => {
-                let len = self.read_u8().await?;
-                let mut domain = vec![0u8; len as _];
-                self.read_exact(&mut domain).await?;
-                String::from_utf8_lossy(&domain).to_string()
-            }
-            // ipv6
-            3 => {
-                let mut addr = [0u8; 16];
-                self.read_exact(&mut addr).await?;
-                Ipv6Addr::new(
-                    ((addr[0] as u16) << 16) | (addr[1] as u16),
-                    ((addr[2] as u16) << 16) | (addr[3] as u16),
-                    ((addr[4] as u16) << 16) | (addr[5] as u16),
-                    ((addr[6] as u16) << 16) | (addr[7] as u16),
-                    ((addr[8] as u16) << 16) | (addr[9] as u16),
-                    ((addr[10] as u16) << 16) | (addr[11] as u16),
-                    ((addr[12] as u16) << 16) | (addr[13] as u16),
-                    ((addr[14] as u16) << 16) | (addr[15] as u16),
-                )
-                .to_string()
-            }
-            // invalid
-            _ => {
-                return Err(Error::RustError("invalid address".to_string()));
-            }
-        };
+        let addr = crate::common::parse_addr(self).await?;
 
         console_log!("connecting to upstream {}:{}", addr, port);
         let mut upstream = Socket::builder().connect(addr, port)?;
