@@ -1,7 +1,6 @@
 use crate::config::VlessConfig;
 use crate::proxy::Proxy;
 
-use std::net::{Ipv4Addr, Ipv6Addr};
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
