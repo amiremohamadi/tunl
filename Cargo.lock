@@ -757,6 +757,7 @@ dependencies = [
  "getrandom",
  "md-5",
  "pin-project-lite",
+ "serde",
  "sha2",
  "tokio",
  "uuid",
