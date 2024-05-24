@@ -1,3 +1,4 @@
+mod common;
 mod config;
 mod proxy;
 
@@ -23,7 +24,7 @@ async fn main(_: Request, env: Env, _: Context) -> Result<Response> {
     wasm_bindgen_futures::spawn_local(async move {
         let events = server.events().unwrap();
         let mut stream = match config.outbound {
-            Outbound::Vless(c) => VlessStream::new(c, &server, events),
+            Outbound::Vless(c) => VmessStream::new(c, &server, events),
         };
 
         if let Err(e) = stream.process().await {
