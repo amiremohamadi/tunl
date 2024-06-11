@@ -5,8 +5,7 @@ use crate::common::{
     KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_IV,
     KDFSALT_CONST_VMESS_HEADER_PAYLOAD_LENGTH_AEAD_KEY,
 };
-use crate::config::VlessConfig;
-use crate::proxy::Proxy;
+use crate::config::Config;
 
 use std::io::Cursor;
 use std::pin::Pin;
@@ -28,7 +27,7 @@ use worker::*;
 
 pin_project! {
     pub struct VmessStream<'a> {
-        pub config: VlessConfig,
+        pub config: Config,
         pub ws: &'a WebSocket,
         pub buffer: BytesMut,
         #[pin]
@@ -37,7 +36,7 @@ pin_project! {
 }
 
 impl<'a> VmessStream<'a> {
-    pub fn new(config: VlessConfig, ws: &'a WebSocket, events: EventStream<'a>) -> Self {
+    pub fn new(config: Config, ws: &'a WebSocket, events: EventStream<'a>) -> Self {
         let buffer = BytesMut::new();
 
         Self {
@@ -127,10 +126,8 @@ impl<'a> VmessStream<'a> {
 
         Ok(header_payload)
     }
-}
 
-impl<'a> Proxy for VmessStream<'a> {
-    async fn process(&mut self) -> Result<()> {
+    pub async fn process(&mut self) -> Result<()> {
         let mut buf = Cursor::new(self.aead_decrypt().await?);
 
         // https://xtls.github.io/en/development/protocols/vmess.html#command-section
