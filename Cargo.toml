@@ -9,6 +9,8 @@ crate-type = ["cdylib"]
 [dependencies]
 tokio = { version = "1.28", features = ["io-util", "rt"] }
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+base64 = "0.22"
 getrandom = { version = "0.2", features = ["js"] }
 worker = "0.0.18"
 futures-util = "0.3.28"

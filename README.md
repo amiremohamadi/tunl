@@ -23,7 +23,7 @@ and visit https://{YOUR-WORKERS-SUBDOMAIN}.workers.dev/link to get the config li
 $ make deploy
 ```
 
-4. Modify the [xray config](./config/xray.json) and run:
+4. Modify the [xray config](./config/vmess.json) and run:
 ```sh
 $ xray -c ./config/xray.json
 ```

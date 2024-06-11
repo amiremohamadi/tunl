@@ -18,8 +18,8 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "CLOUDFLARE_CLEAN_IP",
-                        "port": 80,
+                        "address": "localhost",
+                        "port": 8787,
                         "users": [
                             {
                                 "id": "0fbf4f81-2598-4b6a-a623-0ead4cb9efa8",
@@ -32,9 +32,6 @@
             "streamSettings": {
                 "network": "ws",
                 "wsSettings" : {
-                    "headers": {
-                        "Host": "CF_WORKERS_SUBDOMAIN"
-                    }
                 }
             }
         }
