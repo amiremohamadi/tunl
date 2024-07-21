@@ -149,8 +149,11 @@ impl<'a> VmessStream<'a> {
         buf.read_exact(&mut key).await?;
 
         // ignore options for now
-        let mut options = [0u8; 5];
+        let mut options = [0u8; 4];
         buf.read_exact(&mut options).await?;
+
+        let cmd = buf.read_u8().await?;
+        let is_tcp = cmd == 0x1;
 
         let port = {
             let mut port = [0u8; 2];
@@ -159,8 +162,7 @@ impl<'a> VmessStream<'a> {
         };
         let addr = crate::common::parse_addr(&mut buf).await?;
 
-        console_log!("connecting to upstream {}:{}", addr, port);
-        let mut upstream = Socket::builder().connect(addr, port)?;
+        console_log!("connecting to upstream {}:{} [is_tcp={is_tcp}]", addr, port);
 
         // encrypt payload
         let key = &crate::sha256!(&key)[..16];
@@ -188,7 +190,23 @@ impl<'a> VmessStream<'a> {
         };
         self.write(&header).await?;
 
-        tokio::io::copy_bidirectional(self, &mut upstream).await?;
+        if is_tcp {
+            let mut upstream = Socket::builder().connect(addr, port)?;
+            tokio::io::copy_bidirectional(self, &mut upstream).await?;
+        } else {
+            // cloudflare worker doesn't support udp but we can handle some special cases
+            // for example if request is dns over udp we can instead use the request and
+            // handle it using a DoH.
+
+            // DNS:
+            let mut buff = vec![0u8; 65535];
+
+            let n = self.read(&mut buff).await?;
+            let data = &buff[..n];
+            if crate::dns::doh(data).await.is_ok() {
+                self.write(&data).await?;
+            }
+        }
 
         Ok(())
     }
